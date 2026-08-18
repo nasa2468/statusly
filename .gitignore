@@ -1,0 +1,7 @@
+data/
+*.db
+*.db-*
+.statusly
+bin/
+dist/
+.DS_Store
