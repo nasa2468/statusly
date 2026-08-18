@@ -1,6 +1,6 @@
 server:
   address: ":8080"
-  # password: "admin123"  # uncomment to enable simple admin auth
+  # password: "admin123"  # optional simple auth later
 
 database: "data/statusly.db"
 
@@ -25,3 +25,25 @@ targets:
     address: https://www.google.com
     interval: 60
     timeout: 8
+
+  # ICMP example (requires ping command)
+  # - name: Gateway
+  #   type: icmp
+  #   address: 192.168.1.1
+  #   interval: 60
+  #   timeout: 5
+
+# Notifications (uncomment and fill to enable)
+# notifications:
+#   - type: telegram
+#     token: "123456:ABC-DEF..."
+#     chat_id: "123456789"
+#     enabled: true
+#
+#   - type: discord
+#     url: "https://discord.com/api/webhooks/..."
+#     enabled: true
+#
+#   - type: webhook
+#     url: "https://your-server.com/hook"
+#     enabled: true
