@@ -2,6 +2,7 @@ package storage
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -214,12 +215,16 @@ func (s *Store) History(target string, hours int) ([]HistoryPoint, error) {
 	if hours <= 0 {
 		hours = 24
 	}
+	if hours > 168 {
+		hours = 168 // max 7 days
+	}
+	modifier := fmt.Sprintf("-%d hours", hours)
 	rows, err := s.db.Query(`
 		SELECT checked_at, latency_ms, up
 		FROM checks
 		WHERE target = ? AND checked_at > datetime('now', ?)
 		ORDER BY checked_at ASC
-	`, target, "-"+itoa(hours)+" hours")
+	`, target, modifier)
 	if err != nil {
 		return nil, err
 	}
@@ -247,8 +252,4 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
-}
-
-func itoa(n int) string {
-	return string(rune('0' + n%10)) // simple, enough for hours 1-99
 }
