@@ -1,0 +1,27 @@
+server:
+  address: ":8080"
+  # password: "admin123"  # uncomment to enable simple admin auth
+
+database: "data/statusly.db"
+
+title: "My Services Status"
+description: "Real-time status of my projects and infrastructure"
+
+targets:
+  - name: OpenAI
+    type: http
+    address: https://openai.com
+    interval: 60
+    timeout: 10
+
+  - name: Cloudflare DNS
+    type: tcp
+    address: 1.1.1.1:53
+    interval: 30
+    timeout: 5
+
+  - name: Google
+    type: http
+    address: https://www.google.com
+    interval: 60
+    timeout: 8
