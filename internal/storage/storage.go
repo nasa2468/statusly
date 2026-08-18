@@ -14,23 +14,30 @@ type Store struct {
 }
 
 type Check struct {
-	ID         int64
-	Target     string
-	Up         bool
-	LatencyMs  int64
-	StatusCode int
-	Error      string
-	CheckedAt  time.Time
+	ID         int64     `json:"id"`
+	Target     string    `json:"target"`
+	Up         bool      `json:"up"`
+	LatencyMs  int64     `json:"latency_ms"`
+	StatusCode int       `json:"status_code"`
+	Error      string    `json:"error,omitempty"`
+	CheckedAt  time.Time `json:"checked_at"`
 }
 
 type Summary struct {
-	Target      string  `json:"target"`
-	Up          bool    `json:"up"`
-	Uptime      float64 `json:"uptime"`
-	AvgLatency  float64 `json:"avg_latency"`
-	LastCheck   string  `json:"last_check"`
-	LastError   string  `json:"last_error,omitempty"`
-	StatusCode  int     `json:"status_code,omitempty"`
+	Target     string  `json:"target"`
+	Up         bool    `json:"up"`
+	Uptime     float64 `json:"uptime"`
+	AvgLatency float64 `json:"avg_latency"`
+	LastCheck  string  `json:"last_check"`
+	LastError  string  `json:"last_error,omitempty"`
+	StatusCode int     `json:"status_code,omitempty"`
+	LatencyMs  int64   `json:"latency_ms,omitempty"`
+}
+
+type HistoryPoint struct {
+	Time      string `json:"time"`
+	LatencyMs int64  `json:"latency_ms"`
+	Up        bool   `json:"up"`
 }
 
 func Open(path string) (*Store, error) {
@@ -79,10 +86,10 @@ func (s *Store) Add(c Check) error {
 
 func (s *Store) Summaries() ([]Summary, error) {
 	rows, err := s.db.Query(`
-		SELECT target,
-			MAX(checked_at) as last_time
+		SELECT target, MAX(checked_at) as last_time
 		FROM checks
 		GROUP BY target
+		ORDER BY target
 	`)
 	if err != nil {
 		return nil, err
@@ -97,13 +104,13 @@ func (s *Store) Summaries() ([]Summary, error) {
 			return nil, err
 		}
 
-		sum := Summary{Target: target, LastCheck: lastTime.Format(time.RFC3339)}
+		sum := Summary{Target: target, LastCheck: lastTime.UTC().Format(time.RFC3339)}
 
 		// Latest status
 		var up int
 		var latency int64
 		var code int
-		var errMsg string
+		var errMsg sql.NullString
 		err := s.db.QueryRow(`
 			SELECT up, latency_ms, status_code, error FROM checks
 			WHERE target = ? ORDER BY checked_at DESC LIMIT 1
@@ -111,26 +118,31 @@ func (s *Store) Summaries() ([]Summary, error) {
 		if err == nil {
 			sum.Up = up == 1
 			sum.StatusCode = code
-			sum.LastError = errMsg
+			sum.LatencyMs = latency
+			if errMsg.Valid {
+				sum.LastError = errMsg.String
+			}
 		}
 
 		// Uptime last 24h
-		var total, ups int
+		var total, ups sql.NullInt64
 		s.db.QueryRow(`
-			SELECT COUNT(*), SUM(up) FROM checks
+			SELECT COUNT(*), COALESCE(SUM(up), 0) FROM checks
 			WHERE target = ? AND checked_at > datetime('now', '-24 hours')
 		`, target).Scan(&total, &ups)
-		if total > 0 {
-			sum.Uptime = float64(ups) / float64(total) * 100
+		if total.Valid && total.Int64 > 0 {
+			sum.Uptime = float64(ups.Int64) / float64(total.Int64) * 100
 		}
 
-		// Avg latency last 24h
-		var avg float64
+		// Avg latency last 24h (only successful checks)
+		var avg sql.NullFloat64
 		s.db.QueryRow(`
 			SELECT AVG(latency_ms) FROM checks
 			WHERE target = ? AND up = 1 AND checked_at > datetime('now', '-24 hours')
 		`, target).Scan(&avg)
-		sum.AvgLatency = avg
+		if avg.Valid {
+			sum.AvgLatency = avg.Float64
+		}
 
 		results = append(results, sum)
 	}
@@ -154,10 +166,14 @@ func (s *Store) Recent(limit int) ([]Check, error) {
 	for rows.Next() {
 		var c Check
 		var up int
-		if err := rows.Scan(&c.ID, &c.Target, &up, &c.LatencyMs, &c.StatusCode, &c.Error, &c.CheckedAt); err != nil {
+		var errMsg sql.NullString
+		if err := rows.Scan(&c.ID, &c.Target, &up, &c.LatencyMs, &c.StatusCode, &errMsg, &c.CheckedAt); err != nil {
 			return nil, err
 		}
 		c.Up = up == 1
+		if errMsg.Valid {
+			c.Error = errMsg.String
+		}
 		checks = append(checks, c)
 	}
 	return checks, nil
@@ -180,13 +196,50 @@ func (s *Store) Incidents(limit int) ([]Check, error) {
 	for rows.Next() {
 		var c Check
 		var up int
-		if err := rows.Scan(&c.ID, &c.Target, &up, &c.LatencyMs, &c.StatusCode, &c.Error, &c.CheckedAt); err != nil {
+		var errMsg sql.NullString
+		if err := rows.Scan(&c.ID, &c.Target, &up, &c.LatencyMs, &c.StatusCode, &errMsg, &c.CheckedAt); err != nil {
 			return nil, err
 		}
 		c.Up = false
+		if errMsg.Valid {
+			c.Error = errMsg.String
+		}
 		checks = append(checks, c)
 	}
 	return checks, nil
+}
+
+// History returns recent latency points for a target (for charts)
+func (s *Store) History(target string, hours int) ([]HistoryPoint, error) {
+	if hours <= 0 {
+		hours = 24
+	}
+	rows, err := s.db.Query(`
+		SELECT checked_at, latency_ms, up
+		FROM checks
+		WHERE target = ? AND checked_at > datetime('now', ?)
+		ORDER BY checked_at ASC
+	`, target, "-"+itoa(hours)+" hours")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var points []HistoryPoint
+	for rows.Next() {
+		var t time.Time
+		var latency int64
+		var up int
+		if err := rows.Scan(&t, &latency, &up); err != nil {
+			return nil, err
+		}
+		points = append(points, HistoryPoint{
+			Time:      t.UTC().Format(time.RFC3339),
+			LatencyMs: latency,
+			Up:        up == 1,
+		})
+	}
+	return points, nil
 }
 
 func boolToInt(b bool) int {
@@ -194,4 +247,8 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+func itoa(n int) string {
+	return string(rune('0' + n%10)) // simple, enough for hours 1-99
 }
