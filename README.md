@@ -9,19 +9,21 @@ Single binary · SQLite · Modern UI · Docker ready
 
 ## Features
 
-- 🎨 Beautiful public status page with dark/light mode
-- ⚡ HTTP & TCP monitoring (ICMP coming soon)
+- 🎨 Beautiful public status page (dark / light mode)
+- ⚡ HTTP, TCP & ICMP monitoring
 - 📊 24h uptime percentage + latency
 - 📋 Incident timeline
-- 📦 Single binary, zero external dependencies at runtime
-- 💾 SQLite storage (WAL mode)
+- 🔔 Notifications: Telegram / Discord / Webhook
+- 🏷️ SVG status badges (perfect for README)
+- 📦 Single binary, zero runtime dependencies
+- 💾 SQLite storage
 - 🚀 Docker & docker-compose support
 - 🔗 REST API + Prometheus metrics
-- 🔄 Auto-refresh every 30 seconds
+- 🔄 Auto-refresh every 30s
 
 ## Quick Start
 
-### Option 1: Docker (recommended)
+### Docker (recommended)
 
 ```bash
 git clone https://github.com/nasa2468/statusly.git
@@ -31,9 +33,7 @@ docker compose up -d --build
 
 Open **http://localhost:8080**
 
-### Option 2: Run with Go
-
-Requirements: Go 1.23+
+### Run with Go
 
 ```bash
 git clone https://github.com/nasa2468/statusly.git
@@ -41,8 +41,6 @@ cd statusly
 go mod tidy
 go run ./cmd/statusly
 ```
-
-Then open http://localhost:8080
 
 ## Configuration
 
@@ -55,66 +53,74 @@ server:
 database: "data/statusly.db"
 
 title: "My Services Status"
-description: "Real-time status of my projects and infrastructure"
+description: "Real-time status of my projects"
 
 targets:
   - name: Website
     type: http
     address: https://example.com
-    interval: 60        # seconds
-    timeout: 10         # seconds
-
-  - name: API
-    type: http
-    address: https://api.example.com/health
-    interval: 30
-    timeout: 5
+    interval: 60
+    timeout: 10
 
   - name: Database
     type: tcp
     address: 127.0.0.1:5432
     interval: 60
     timeout: 5
+
+  - name: Gateway
+    type: icmp
+    address: 192.168.1.1
+    interval: 60
+    timeout: 5
+
+notifications:
+  - type: telegram
+    token: "YOUR_BOT_TOKEN"
+    chat_id: "YOUR_CHAT_ID"
+    enabled: true
+
+  - type: discord
+    url: "https://discord.com/api/webhooks/..."
+    enabled: true
 ```
 
-Restart Statusly after changing the configuration.
+## Status Badges
 
-## API Endpoints
+Overall status:
+
+```markdown
+![Status](https://your-domain.com/badge.svg)
+```
+
+Per target:
+
+```markdown
+![Website](https://your-domain.com/badge/Website.svg)
+```
+
+## API
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /api/status` | Overall status + all targets summary |
-| `GET /api/incidents` | Recent down events |
-| `GET /api/recent?limit=100` | Latest check results |
-| `GET /api/history?target=Name&hours=24` | Latency history for charts |
+| `GET /api/status` | Overall status + targets |
+| `GET /api/incidents` | Recent incidents |
+| `GET /api/recent?limit=100` | Latest checks |
+| `GET /api/history?target=Name&hours=24` | Latency history |
+| `GET /badge.svg` | Overall SVG badge |
+| `GET /badge/{name}.svg` | Per-target SVG badge |
 | `GET /metrics` | Prometheus metrics |
 | `GET /healthz` | Health check |
 
-## Project Structure
-
-```
-statusly/
-├── cmd/statusly/main.go      # Entry point
-├── internal/
-│   ├── api/                 # REST API + Prometheus
-│   ├── checker/             # HTTP / TCP probes
-│   ├── config/              # YAML config
-│   └── storage/             # SQLite
-├── web/index.html          # Status page frontend
-├── config.yaml             # Example config
-├── Dockerfile
-└── docker-compose.yml
-```
-
 ## Roadmap
 
-- [ ] Notifications (Telegram, Discord, Email, Webhook)
-- [ ] ICMP / Ping support
+- [x] Notifications (Telegram, Discord, Webhook)
+- [x] ICMP support
+- [x] Status badges
 - [ ] Maintenance windows
-- [ ] Embeddable status badge for README
+- [ ] Latency charts on dashboard
 - [ ] Simple admin authentication
 - [ ] OpenPing integration
-- [ ] Latency charts on the dashboard
 
 ## License
 
