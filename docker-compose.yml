@@ -1,0 +1,9 @@
+services:
+  statusly:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+      - ./config.yaml:/app/config.yaml:ro
+    restart: unless-stopped
