@@ -7,11 +7,12 @@ import (
 )
 
 type Config struct {
-	Server      Server   `yaml:"server"`
-	Database    string   `yaml:"database"`
-	Title       string   `yaml:"title"`
-	Description string   `yaml:"description"`
-	Targets     []Target `yaml:"targets"`
+	Server        Server         `yaml:"server"`
+	Database      string         `yaml:"database"`
+	Title         string         `yaml:"title"`
+	Description   string         `yaml:"description"`
+	Targets       []Target       `yaml:"targets"`
+	Notifications []Notification `yaml:"notifications"`
 }
 
 type Server struct {
@@ -21,10 +22,18 @@ type Server struct {
 
 type Target struct {
 	Name     string `yaml:"name"`
-	Type     string `yaml:"type"` // http or tcp
+	Type     string `yaml:"type"` // http, tcp, icmp
 	Address  string `yaml:"address"`
 	Interval int    `yaml:"interval"` // seconds
 	Timeout  int    `yaml:"timeout"`  // seconds
+}
+
+type Notification struct {
+	Type    string `yaml:"type"` // telegram, discord, webhook
+	URL     string `yaml:"url"`  // webhook url or discord webhook
+	Token   string `yaml:"token"`
+	ChatID  string `yaml:"chat_id"` // for telegram
+	Enabled bool   `yaml:"enabled"`
 }
 
 func Load(path string) (*Config, error) {
