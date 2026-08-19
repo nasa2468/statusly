@@ -14,53 +14,53 @@ import (
 
 type Notifier struct {
 	configs []config.Notification
+	client  *http.Client
 }
 
 func New(cfgs []config.Notification) *Notifier {
-	return &Notifier{configs: cfgs}
+	return &Notifier{
+		configs: cfgs,
+		client:  &http.Client{Timeout: 10 * time.Second},
+	}
 }
 
 // NotifyStateChange sends alerts when a target goes down or recovers.
 func (n *Notifier) NotifyStateChange(prevUp bool, c storage.Check) {
-	if len(n.configs) == 0 {
-		return
-	}
-	// Only notify on state change
-	if prevUp == c.Up {
+	if len(n.configs) == 0 || prevUp == c.Up {
 		return
 	}
 
 	var title, body string
 	if c.Up {
-		title = "✅ Recovered"
-		body = fmt.Sprintf("**%s** is back online\nLatency: %d ms", c.Target, c.LatencyMs)
+		title = "Recovered"
+		body = fmt.Sprintf("%s is back online\nLatency: %d ms", c.Target, c.LatencyMs)
 	} else {
-		title = "🔴 Down"
+		title = "Down"
 		errMsg := c.Error
 		if errMsg == "" {
 			errMsg = "Service unavailable"
 		}
-		body = fmt.Sprintf("**%s** is down\nError: %s", c.Target, errMsg)
+		body = fmt.Sprintf("%s is down\nError: %s", c.Target, errMsg)
 	}
 
 	msg := fmt.Sprintf("%s\n%s\nTime: %s", title, body, c.CheckedAt.Format(time.RFC3339))
 
 	for _, cfg := range n.configs {
-		if !cfg.Enabled && cfg.Type != "" {
-			// treat missing enabled as true for simplicity if type is set
+		if !cfg.Enabled {
+			continue
 		}
 		switch strings.ToLower(cfg.Type) {
 		case "telegram":
-			go sendTelegram(cfg, msg)
+			go sendTelegram(n.client, cfg, msg)
 		case "discord":
-			go sendDiscord(cfg, title, body)
+			go sendDiscord(n.client, cfg, title, body)
 		case "webhook":
-			go sendWebhook(cfg, c)
+			go sendWebhook(n.client, cfg, c)
 		}
 	}
 }
 
-func sendTelegram(cfg config.Notification, text string) {
+func sendTelegram(client *http.Client, cfg config.Notification, text string) {
 	if cfg.Token == "" || cfg.ChatID == "" {
 		return
 	}
@@ -70,28 +70,24 @@ func sendTelegram(cfg config.Notification, text string) {
 		"text":       text,
 		"parse_mode": "Markdown",
 	}
-	body, _ := json.Marshal(payload)
-	http.Post(url, "application/json", bytes.NewReader(body))
+	doJSON(client, url, payload)
 }
 
-func sendDiscord(cfg config.Notification, title, description string) {
+func sendDiscord(client *http.Client, cfg config.Notification, title, description string) {
 	if cfg.URL == "" {
 		return
 	}
 	payload := map[string]any{
-		"embeds": []map[string]any{
-			{
-				"title":       title,
-				"description": description,
-				"timestamp":   time.Now().UTC().Format(time.RFC3339),
-			},
-		},
+		"embeds": []map[string]any{{
+			"title":       title,
+			"description": description,
+			"timestamp":   time.Now().UTC().Format(time.RFC3339),
+		}},
 	}
-	body, _ := json.Marshal(payload)
-	http.Post(cfg.URL, "application/json", bytes.NewReader(body))
+	doJSON(client, cfg.URL, payload)
 }
 
-func sendWebhook(cfg config.Notification, c storage.Check) {
+func sendWebhook(client *http.Client, cfg config.Notification, c storage.Check) {
 	if cfg.URL == "" {
 		return
 	}
@@ -103,6 +99,22 @@ func sendWebhook(cfg config.Notification, c storage.Check) {
 		"error":       c.Error,
 		"checked_at":  c.CheckedAt.Format(time.RFC3339),
 	}
-	body, _ := json.Marshal(payload)
-	http.Post(cfg.URL, "application/json", bytes.NewReader(body))
+	doJSON(client, cfg.URL, payload)
+}
+
+func doJSON(client *http.Client, url string, payload any) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
 }
