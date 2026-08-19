@@ -28,26 +28,32 @@ func main() {
 
 	notifier := notify.New(cfg.Notifications)
 
-	// Track previous state for change detection
+	// Track previous state for change detection. Notification delivery is
+	// asynchronous, so monitoring never waits on a remote webhook.
 	var stateMu sync.Mutex
 	prevState := make(map[string]bool)
 
-	// Start monitors
 	for _, t := range cfg.Targets {
 		go monitor(t, store, notifier, &stateMu, prevState)
 	}
 
 	mux := http.NewServeMux()
-
-	// Static frontend
 	mux.Handle("/", http.FileServer(http.Dir("web")))
 
-	// API + Badge
 	apiServer := &api.Server{Store: store, Config: cfg}
 	apiServer.Register(mux)
 
+	server := &http.Server{
+		Addr:              cfg.Server.Address,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
 	log.Printf("Statusly listening on %s", cfg.Server.Address)
-	log.Fatal(http.ListenAndServe(cfg.Server.Address, mux))
+	log.Fatal(server.ListenAndServe())
 }
 
 func monitor(t config.Target, store *storage.Store, notifier *notify.Notifier, mu *sync.Mutex, prev map[string]bool) {
@@ -88,17 +94,17 @@ func monitor(t config.Target, store *storage.Store, notifier *notify.Notifier, m
 		} else {
 			api.RecordMetrics(c)
 
-			// Notify on state change
 			mu.Lock()
 			wasUp, seen := prev[t.Name]
 			if !seen {
-				// first check, just record state
 				prev[t.Name] = c.Up
+				mu.Unlock()
 			} else {
-				notifier.NotifyStateChange(wasUp, c)
 				prev[t.Name] = c.Up
+				mu.Unlock()
+				// Never hold the shared state lock while a notifier is running.
+				notifier.NotifyStateChange(wasUp, c)
 			}
-			mu.Unlock()
 		}
 
 		time.Sleep(interval)
