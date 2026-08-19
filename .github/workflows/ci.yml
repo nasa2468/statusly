@@ -16,11 +16,16 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.23'
+          cache: true
 
-      - name: Build
-        run: |
-          go mod tidy
-          go build -o statusly ./cmd/statusly
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Format check
+        run: test -z "$(gofmt -l .)"
 
       - name: Test
         run: go test ./...
+
+      - name: Build
+        run: go build -trimpath -o statusly ./cmd/statusly
