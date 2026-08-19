@@ -1,10 +1,12 @@
 package api
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/nasa2468/statusly/internal/config"
 	"github.com/nasa2468/statusly/internal/storage"
@@ -36,29 +38,37 @@ func init() {
 func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok\n"))
+		_, _ = w.Write([]byte("ok\n"))
 	})
 	mux.HandleFunc("/api/status", s.status)
 	mux.HandleFunc("/api/incidents", s.incidents)
 	mux.HandleFunc("/api/recent", s.recent)
 	mux.HandleFunc("/api/history", s.history)
+	mux.HandleFunc("/api/export.csv", s.exportCSV)
 	mux.HandleFunc("/badge.svg", s.badge)
 	mux.HandleFunc("/badge/", s.badgeTarget)
 	mux.Handle("/metrics", promhttp.Handler())
 }
 
-func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) status(w http.ResponseWriter, r *http.Request) {
+	if !requireGET(w, r) {
+		return
+	}
 	summaries, err := s.Store.Summaries()
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	overall := "operational"
-	for _, sum := range summaries {
-		if !sum.Up {
-			overall = "degraded"
-			break
+	if len(summaries) == 0 {
+		overall = "unknown"
+	} else {
+		for _, sum := range summaries {
+			if !sum.Up {
+				overall = "degraded"
+				break
+			}
 		}
 	}
 
@@ -71,16 +81,22 @@ func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, resp)
 }
 
-func (s *Server) incidents(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) incidents(w http.ResponseWriter, r *http.Request) {
+	if !requireGET(w, r) {
+		return
+	}
 	items, err := s.Store.Incidents(50)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, items)
 }
 
 func (s *Server) recent(w http.ResponseWriter, r *http.Request) {
+	if !requireGET(w, r) {
+		return
+	}
 	n, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if n <= 0 {
 		n = 100
@@ -90,16 +106,19 @@ func (s *Server) recent(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := s.Store.Recent(n)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, items)
 }
 
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {
+	if !requireGET(w, r) {
+		return
+	}
 	target := r.URL.Query().Get("target")
 	if target == "" {
-		http.Error(w, "target is required", 400)
+		http.Error(w, "target is required", http.StatusBadRequest)
 		return
 	}
 	hours, _ := strconv.Atoi(r.URL.Query().Get("hours"))
@@ -108,25 +127,70 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 	}
 	points, err := s.Store.History(target, hours)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, points)
 }
 
+func (s *Server) exportCSV(w http.ResponseWriter, r *http.Request) {
+	if !requireGET(w, r) {
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = 1000
+	}
+	if limit > 10000 {
+		limit = 10000
+	}
+
+	items, err := s.Store.Recent(limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="statusly-checks.csv"`)
+	w.Header().Set("Cache-Control", "no-cache")
+
+	writer := csv.NewWriter(w)
+	if err := writer.Write([]string{"id", "target", "up", "latency_ms", "status_code", "error", "checked_at"}); err != nil {
+		return
+	}
+	for _, item := range items {
+		if err := writer.Write([]string{
+			strconv.FormatInt(item.ID, 10),
+			item.Target,
+			strconv.FormatBool(item.Up),
+			strconv.FormatInt(item.LatencyMs, 10),
+			strconv.Itoa(item.StatusCode),
+			item.Error,
+			item.CheckedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
+		}); err != nil {
+			return
+		}
+	}
+	writer.Flush()
+}
+
 // Overall status badge: /badge.svg
-func (s *Server) badge(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) badge(w http.ResponseWriter, r *http.Request) {
+	if !requireGET(w, r) {
+		return
+	}
 	summaries, err := s.Store.Summaries()
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	overall := "operational"
-	color := "#10b981" // green
+	color := "#10b981"
 	for _, sum := range summaries {
 		if !sum.Up {
 			overall = "degraded"
-			color = "#f59e0b" // amber
+			color = "#f59e0b"
 			break
 		}
 	}
@@ -139,8 +203,10 @@ func (s *Server) badge(w http.ResponseWriter, _ *http.Request) {
 
 // Per-target badge: /badge/Website.svg or /badge/Website
 func (s *Server) badgeTarget(w http.ResponseWriter, r *http.Request) {
-	name := r.URL.Path[len("/badge/"):]
-	name = stringsTrimSuffix(name, ".svg")
+	if !requireGET(w, r) {
+		return
+	}
+	name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/badge/"), ".svg")
 	if name == "" {
 		http.NotFound(w, r)
 		return
@@ -148,7 +214,7 @@ func (s *Server) badgeTarget(w http.ResponseWriter, r *http.Request) {
 
 	summaries, err := s.Store.Summaries()
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -174,7 +240,6 @@ func (s *Server) badgeTarget(w http.ResponseWriter, r *http.Request) {
 }
 
 func renderBadge(w http.ResponseWriter, label, status, color string) {
-	// Simple shields.io style SVG
 	labelW := 6*len(label) + 12
 	statusW := 6*len(status) + 12
 	totalW := labelW + statusW
@@ -197,15 +262,8 @@ func renderBadge(w http.ResponseWriter, label, status, color string) {
 </svg>`, totalW, totalW, labelW, labelW, statusW, color, totalW, labelW/2, label, labelW+statusW/2, status)
 
 	w.Header().Set("Content-Type", "image/svg+xml")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Write([]byte(svg))
-}
-
-func stringsTrimSuffix(s, suffix string) string {
-	if len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix {
-		return s[:len(s)-len(suffix)]
-	}
-	return s
+	w.Header().Set("Cache-Control", "public, max-age=60")
+	_, _ = w.Write([]byte(svg))
 }
 
 func RecordMetrics(c storage.Check) {
@@ -217,8 +275,19 @@ func RecordMetrics(c storage.Check) {
 	latency.WithLabelValues(c.Target).Set(float64(c.LatencyMs))
 }
 
+func requireGET(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return false
+	}
+	return true
+}
+
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-cache")
-	json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		return
+	}
 }
